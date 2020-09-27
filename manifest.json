@@ -1,0 +1,18 @@
+{
+  "name": "associate_link",
+  "description": "关联链接",
+  "version": "1.0",
+  "manifest_version": 2,
+  "icons": {
+    "16": "icon.png",
+    "32": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+
+  "permissions": ["activeTab", "storage",   "tabs"],
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  }
+}
