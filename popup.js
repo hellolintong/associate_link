@@ -2,147 +2,234 @@ chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
     const currentTab = tabs[0]
     let db = initDatabase()
     bindEvent(db, currentTab)
-    displayLinks(db, currentTab.url)
+    displayTags(db, currentTab.url)
 })
 
+var lastTagName
+
 function initDatabase() {
-   let db = openDatabase('associate_link', '1.0', '链接关联', 30 * 1024 * 1024)
+   let db = openDatabase('tags', '1.0', '标签插件', 30 * 1024 * 1024)
     db.transaction(function (tx) {
-        tx.executeSql('create table if not exists links (srcLink, relatedLink, relatedText)')
+        tx.executeSql('create table if not exists tags (tagName)')
+        tx.executeSql('create table if not exists tagUrls (tagName, relatedLink, relatedText)')
+        tx.executeSql('create table if not exists scene (key, value)', [], function () {
+            tx.executeSql("select value from scene where key='tag'", [], function (tx, data2) {
+                if (data2.rows.length === 0) {
+                    tx.executeSql("insert into scene (key, value) values ('tag', '')")
+                } else {
+                    lastTagName = data2.rows[0].value
+                }
+            })
+        })
     })
     return db
 }
 
-function getAll(db, url, handler) {
+function getTagLinks(db, tagName, handler) {
     db.transaction(function (tx) {
-        tx.executeSql('SELECT srcLink, relatedLink, relatedText FROM links where srcLink=?', [url], function (tx, data) {
-            let array = []
-            let len = data.rows.length;
-            for (let i = 0; i < len; i++){
-                let o = {}
-                o.srcLink = data.rows.item(i).srcLink
-                o.relatedLink = data.rows.item(i).relatedLink
-                o.relatedText = data.rows.item(i).relatedText
-                array.push(o)
+        tx.executeSql("SELECT tagName, relatedLink, relatedText from tagUrls where tagName=?", [tagName], function (tx, data){
+           handler(data)
+        })
+    })
+}
+
+function collectUrl(db, tagName, url, text) {
+    getTagLinks(db, tagName, function (data) {
+        for (let i = 0; i < data.rows.length; i++) {
+            if (data.rows[i].relatedLink === url) {
+                return
             }
-            handler(array)
-        });
-    });
-}
-
-function addAll(db, array) {
-    db.transaction(function (tx) {
-        for (let i = 0; i < array.length; i++) {
-            tx.executeSql('insert into links (srcLink, relatedLink, relatedText) values (?, ?, ?) ', [array[i].srcLink, array[i].relatedLink, array[i].relatedText])
         }
-    });
+        db.transaction(function (tx) {
+            tx.executeSql('insert into tagUrls (tagName, relatedLink, relatedText) values (?, ?, ?) ', [tagName, url, text], function (tx, data) {
+                displayTags(db, url)
+            })
+        });
+    })
 }
 
-function remove(db, obj) {
+function addTag(db, url, text, tagName) {
     db.transaction(function (tx) {
-        tx.executeSql('delete from links where srcLink = ? and relatedLink = ?', [obj.srcLink, obj.relatedLink])
-    });
+        tx.executeSql("SELECT tagName from tags where tagName=?", [tagName], function (tx, data) {
+             for (let i = 0; i < data.rows.length; i++) {
+                 if (data.rows[i].tagName === tagName) {
+                     return
+                 }
+             }
+             db.transaction(function (tx) {
+                 tx.executeSql("insert into tags (tagName) values (?) ", [tagName], function (tx, data) {
+                     tx.executeSql("insert into tagUrls (tagName, relatedLink, relatedText) values (?, ?, ?)", [tagName, url, text], function (tx, data) {
+                         displayTags(db, url)
+                     })
+                 })
+             })
+        })
+    })
 }
 
-function displayLinks(db, url) {
-    getAll(db, url, function (array) {
-        for (let i = 0; i < array.length; i++) {
-            appendChildren(array[i].relatedLink, array[i].relatedText)
+function checkTag(db, tagName) {
+    clearChildren("#links")
+    getTagLinks(db, tagName, function (data) {
+        let links = document.querySelector('#links')
+        for (let i = 0; i < data.rows.length; i++) {
+            let input = document.createElement('input')
+            input.type = "radio"
+            input.value = data.rows[i].relatedLink
+            input.name = tagName
+            let a = document.createElement('a')
+            a.href = input.value
+            a.text = data.rows[i].relatedText
+            a.target = '_blank'
+            links.appendChild(input)
+            links.appendChild(a)
+            links.appendChild(document.createElement('br'))
         }
     })
 }
 
-function appendChildren(link, text) {
-    let links = document.querySelector('#links')
-    let li = document.createElement('li')
-    let a = document.createElement('a')
-    a.href = link
-    a.text = text
-    a.target = '_blank'
-    li.appendChild(a)
-    links.appendChild(li)
+function deleteUrl(db, tagName, relatedLink) {
+    db.transaction(function (tx) {
+        tx.executeSql("delete from tagUrls where relatedLink = ?", [relatedLink], function (tx, data) {
+            checkTag(db, tagName)
+        })
+    })
+}
+
+function deleteTag(db, url, tagName) {
+    db.transaction(function (tx) {
+        tx.executeSql("delete from tags where tagName = ?", [tagName], function (tx, data) {
+            displayTags(db, url)
+        })
+        tx.executeSql("delete from tagUrls where tagName = ?", [tagName], function (tx, data) {
+            clearChildren("#links")
+        })
+    })
+}
+
+function displayTags(db, url) {
+    clearChildren("#tags")
+    clearChildren('#links')
+    db.transaction(function (tx) {
+        tx.executeSql("select distinct(tagName) from tagUrls where relatedLink = ?", [url], function (tx, data) {
+            let links = document.querySelector('#tags')
+            for (let i = 0; i < data.rows.length; i++) {
+                let input = document.createElement('input')
+                input.type = "radio"
+
+                input.value = data.rows[i].tagName
+                input.name = url
+                input.addEventListener('change', function (){
+                    lastTagName = getSelectedTag()
+                    db.transaction(function (tx) {
+                        tx.executeSql('update scene set value=? where key=?', [lastTagName, 'tag'], function () {
+                            checkTag(db, data.rows[i].tagName)
+                        })
+                    })
+                })
+                links.appendChild(input)
+                links.appendChild(document.createTextNode(data.rows[i].tagName))
+                links.appendChild(document.createElement('br'))
+                if (data.rows[i].tagName === lastTagName) {
+                    input.click()
+                }
+            }
+
+            links.appendChild(document.createTextNode('--------'))
+            links.appendChild(document.createElement('br'))
+
+            tx.executeSql("select distinct(tagName) from tagUrls where relatedLink != ?", [url], function (tx, data2) {
+                let links = document.querySelector('#tags')
+                for (let i = 0; i < data2.rows.length; i++) {
+                    let found = false
+                    for (let j = 0; j < data.rows.length; j++) {
+                        if (data2.rows[i].tagName === data.rows[j].tagName) {
+                            found = true
+                            break
+                        }
+                    }
+                    if (found === true) {
+                        continue
+                    }
+                    let input = document.createElement('input')
+                    input.type = "radio"
+                    input.value = data2.rows[i].tagName
+                    input.name = url
+                    input.addEventListener('change', function (){
+                        checkTag(db, data2.rows[i].tagName)
+                    })
+                    links.appendChild(input)
+                    links.appendChild(document.createTextNode(data2.rows[i].tagName))
+                    links.appendChild(document.createElement('br'))
+                    if (data2.rows[i].tagName === lastTagName) {
+                        input.click()
+                    }
+                }
+            })
+        })
+    })
 }
 
 
-function clearChildren() {
-    let links = document.querySelector('#links')
-    while (links.firstChild) {
-        links.removeChild(links.lastChild);
+function clearChildren(name) {
+    let nodes = document.querySelector(name)
+    while (nodes.firstChild) {
+        nodes.removeChild(nodes.lastChild);
     }
 }
 
 function clearInputs() {
-    document.querySelector('#newText').value = ''
-    document.querySelector('#newLink').value = ''
-    document.querySelector('#deleteLink').value = ''
+    document.querySelector('#newTag').value = ''
 }
 
-function markLink(url, link, text, display, db) {
-    getAll(db, url, function (array) {
-        for (let i = 0; i < array.length; i++) {
-            if (array[i].relatedLink === link) {
-                return
-            }
+function getSelectedTag() {
+    let tags = document.querySelector('#tags').childNodes
+    for (let i = 0; i < tags.length; i++) {
+        if (tags[i].checked === true) {
+            return tags[i].value
         }
-        let array2 = []
-        let o = {}
-        o.srcLink = url
-        o.relatedLink = link
-        o.relatedText = text
-        array2.push(o)
-        addAll(db, array2)
-        if (display === true) {
-            appendChildren(link, text)
+    }
+    return "";
+}
+
+function getSelectedUrl() {
+    let links = document.querySelector('#links').childNodes
+    for (let i = 0; i < links.length; i++) {
+        if (links[i].checked === true) {
+            return links[i].value
         }
-        clearInputs()
-    })
+    }
+    return "";
 }
 
 function bindEvent(db, currentTab) {
-    document.querySelector('#createItem').addEventListener('click', () => {
-        let text = document.querySelector('#newText').value;
-        let link = document.querySelector('#newLink').value;
-        markLink(currentTab.url, link, text, true, db)
-        markLink(link, currentTab.link, currentTab.title, false, db)
-    })
-
-    document.querySelector('#markItems').addEventListener('click', () => {
-        chrome.tabs.getAllInWindow(null, function(tabs){
-            for (let i = 0; i < tabs.length; i++) {
-                for (let j = 0; j < tabs.length; j++) {
-                    if (i === j) {
-                        continue
-                    }
-                    let display = false
-                    if (tabs[i].url === currentTab.url) {
-                        display = true
-                    }
-                    markLink(tabs[i].url, tabs[j].url, tabs[j].title, display, db)
-                }
-            }
-        });
-    })
-
-    document.querySelector('#moreActions').addEventListener('click', () => {
-        let node = document.querySelector('#moreActionsDetail')
-        if (node.style.display === "none") {
-            node.style.display = "block";
-        } else {
-            node.style.display = "none";
-        }
-    })
-
-    document.querySelector('#deleteItem').addEventListener('click', () => {
-        let link = document.querySelector('#deleteLink').value;
-        if (link === "") {
+    document.querySelector('#collectUrl').addEventListener('click', () => {
+        let tagName = getSelectedTag()
+        if (tagName === "") {
             return
         }
-        let obj = {}
-        obj.srcLink = currentTab.url
-        obj.relatedLink = link
-        remove(db, obj)
-        clearChildren()
+        collectUrl(db, tagName, currentTab.url, currentTab.title)
+    })
+
+    document.querySelector('#addTag').addEventListener('click', () => {
+       let tagName = document.querySelector('#newTag').value
+        addTag(db, currentTab.url, currentTab.title, tagName)
         clearInputs()
-        displayLinks(db, currentTab.url)
+    })
+
+    document.querySelector('#deleteTag').addEventListener('click', () => {
+        let tagName = getSelectedTag()
+        if (tagName === "") {
+            return
+        }
+        deleteTag(db, currentTab.url, tagName)
+    })
+
+    document.querySelector('#deleteUrl').addEventListener('click', () => {
+        let tagName = getSelectedTag()
+        let urlName = getSelectedUrl()
+        if (urlName === "" || tagName === "") {
+            return
+        }
+        deleteUrl(db, tagName, urlName)
     })
 }
