@@ -191,6 +191,16 @@ function getSelectedTag() {
     return "";
 }
 
+function getAllUrls() {
+    let links = document.querySelector('#links').childNodes
+    let array = []
+    for (let i = 0; i < links.length; i++) {
+        if (links[i].nodeName === "A") {
+            array.push(links[i])
+        }
+    }
+    return array
+}
 function getSelectedUrl() {
     let links = document.querySelector('#links').childNodes
     for (let i = 0; i < links.length; i++) {
@@ -208,6 +218,13 @@ function bindEvent(db, currentTab) {
             return
         }
         collectUrl(db, tagName, currentTab.url, currentTab.title)
+    })
+
+    document.querySelector('#visitAll').addEventListener('click', () => {
+        let urls = getAllUrls()
+        for (let i = 0; i < urls.length; i++) {
+            urls[i].click()
+        }
     })
 
     document.querySelector('#addTag').addEventListener('click', () => {
